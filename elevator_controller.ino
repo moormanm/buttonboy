@@ -16,12 +16,16 @@ Adafruit_Soundboard sfx = Adafruit_Soundboard(&Serial1, &Serial, SFX_RST);
 
 #define DIR_UP 1
 #define DIR_DOWN -1
-#define INITIAL_DELAY 1000
 #define FLOOR_PASSING_DELAY 1600
 #define FLOOR_STOP_DELAY 3000
 
-char floorPassingChimeFile[] = "floorPassingChime";
-char floorStoppingChimeFile[] = "floorStoppingChime";
+enum DoorState { OPEN, CLOSED, OPENING, CLOSING };
+const char* doorStStr[4] = {"Open","Closed","Opening", "Closing"};
+DoorState doorState = CLOSED;
+
+char floorPassingChimeFile[] = "PASSCHMEWAV";
+char doorOpeningFile[] = "OPENDOORWAV";
+char doorClosingFile[] = "CLSEDOORWAV";
 
 //Pin configurations
 #define FIRE_BUTTON 24
@@ -120,7 +124,7 @@ boolean activeCalls[NUM_FLOOR_BUTTONS];
 int currentDirection = 0;
 unsigned long elevatorStartedMovingTimeMillis;
 unsigned long doorOpenedTimeMillis;
-boolean doorIsOpen = false;
+
 boolean elevatorIsMoving = false;
 boolean floorChanged;
 
@@ -142,7 +146,7 @@ void debugPrintLn(const char* fmt, ...) {
 }
 
 void printState() { 
-  debugPrintLn("currentDirection=%d, elevatorIsMoving=%d, doorIsOpen=%d, currentFloor=%d", currentDirection, elevatorIsMoving, doorIsOpen, currentFloor);
+  debugPrintLn("currentDirection=%d, elevatorIsMoving=%d, doorState=%s, currentFloor=%d", currentDirection, elevatorIsMoving, doorStStr[doorState], currentFloor);
 }
 
 /*
@@ -185,16 +189,7 @@ void fireButtonModeRenderState() {
     }
 }
 */
-void tryToCloseDoor() {
-  
-  if( millis() - doorOpenedTimeMillis < FLOOR_STOP_DELAY ) {
-      return; //nothing to do - leave the door open
-  }
-  debugPrintLn("Closing door");
-  printState();
-  doorIsOpen = false;
-  return;
-}
+
 
 void startMoving() {
   debugPrintLn("Start moving");
@@ -208,12 +203,7 @@ boolean elevatorHasReachedNextFloor() {
   
 }
 
-void openDoor() {
-  doorOpenedTimeMillis = millis();
-  doorIsOpen = true;
-  debugPrintLn("Opening door");
-  printState();
-}
+
 void unsetCall(int buttonId) {
   debugPrintLn("Unsetting call %d\n", buttonId);
   printState();
@@ -224,6 +214,38 @@ void setCall(int buttonId) {
   debugPrintLn("Setting call %d\n", buttonId);
   printState();
   activeCalls[buttonId] = true;
+}
+
+unsigned long doorOpenStartedTimeMillis;
+unsigned long doorOpenFinishedTimeMillis;
+unsigned long doorCloseStartedTimeMillis;
+#define DOOR_OPEN_DELAY 2000
+#define DOOR_CLOSING_DELAY 1200
+#define DOOR_OPENING_DELAY 1200
+
+void startOpeningDoor() {
+  doorOpenStartedTimeMillis = millis();
+  doorState = OPENING;
+  debugPrintLn("Opening door");
+  printState();
+}
+
+void updateDoorState() {
+  if(doorState == OPEN && millis() - doorOpenFinishedTimeMillis > DOOR_OPEN_DELAY) {
+    doorState = CLOSING;
+    doorCloseStartedTimeMillis = millis();
+  }
+  else if( doorState == CLOSING && millis() - doorCloseStartedTimeMillis > DOOR_CLOSING_DELAY) {
+    doorState = CLOSED; 
+  }
+  else if( doorState == OPENING && millis() - doorOpenStartedTimeMillis > DOOR_OPENING_DELAY) {
+    doorState = OPEN;
+    doorOpenFinishedTimeMillis = millis();
+  }
+  else {
+    return;
+  }
+  printState();
 }
 
 
@@ -239,9 +261,9 @@ void normalModeIteration() {
    consumeNewFloorCalls();
    
    determineCurrentDirection();
-   
-   if(doorIsOpen) {
-     tryToCloseDoor();
+
+   updateDoorState();
+   if(doorState != CLOSED) {
      return;
    }
    
@@ -264,7 +286,7 @@ void normalModeIteration() {
    elevatorIsMoving = false;
    if(activeCalls[currentFloor]) {
       unsetCall(currentFloor);
-      openDoor();
+      startOpeningDoor();
    }
    else {
      startMoving();
@@ -404,29 +426,69 @@ void enterOrExitFireButtonMode() {
   
 }
 */
+
+unsigned long lastMovementRenderTime = -1;
+#define PROGRESS_MOVEMENT_DISPLAY_DELAY 100
+boolean lastElevatorIsMovingState = false;
+int segmentSequence[6] = { 1, 2, 4, 8, 16, 32 };
+int sequenceIdx = 0;
+boolean renderMovementIndicator() {
+  boolean isDirty = false;
+  //Clear screen if it stopped
+  if(!elevatorIsMoving) {
+     if(lastElevatorIsMovingState != elevatorIsMoving) {
+        matrix.writeDigitRaw(3, 0);
+        isDirty = true;
+     }
+     lastElevatorIsMovingState = elevatorIsMoving;
+     return isDirty;
+  }
+  lastElevatorIsMovingState = elevatorIsMoving;
+  
+  if(millis() - lastMovementRenderTime < PROGRESS_MOVEMENT_DISPLAY_DELAY) {
+    return false;
+  }
+  lastMovementRenderTime = millis();
+  matrix.writeDigitRaw(3, segmentSequence[sequenceIdx]);
+  sequenceIdx++;
+  if(sequenceIdx == 6) {
+    sequenceIdx = 0;
+  }
+  return true;
+  
+}
+
 int lastFloor = -1;
 int lastDirection = -1;
+DoorState lastDoorState = CLOSED;
 void normalModeRenderState() {
-    
     int floorToDisplay = floorButtonId2FloorNumber[currentFloor];
+    boolean dirty = false;
     if(lastFloor != currentFloor) {
       lastFloor = currentFloor;
       //Current floor rendering
       matrix.writeDigitNum(0, floorToDisplay / 10, false);
       matrix.writeDigitNum(1, floorToDisplay % 10, false);  
-      matrix.writeDisplay();
+      dirty = true;
     }
 
+    dirty |= renderMovementIndicator();
     if(currentDirection != lastDirection) {
+       dirty = true;
        lastDirection = currentDirection;
        if(currentDirection == DIR_UP) {
-          //matrix.writeDigitRaw(4,  2 + 4 + 8 + 16 + 32);   
+          matrix.writeDigitRaw(4,  2 + 4 + 8 + 16 + 32);   
+       }
+       else if(currentDirection == DIR_DOWN) { 
+          matrix.writeDigitRaw(4,  2 + 4 + 8 + 16 + 64);
        }
        else {
-          //matrix.writeDigitRaw(4,  2 + 4 + 8 + 16 + 64);
+          matrix.writeDigitRaw(4,  0); 
        }
     }
-    
+    if(dirty) {
+      matrix.writeDisplay();
+    }
     //light up or turn off currently pressed buttons
     for(int i=0; i<NUM_BUTTONS; i++) {
        boolean illuminated;
@@ -441,20 +503,30 @@ void normalModeRenderState() {
     }
     
 
-    if(floorChanged) {
+    if(floorChanged && elevatorIsMoving) {
       debugPrintLn("playing a sound");
       safeStop();
-      if(elevatorIsMoving) {
-        if(!sfx.playTrack("T02     WAV")) {
-          debugPrintLn("failed to play sound");
-        }
-      }
-      else {
-        if(!sfx.playTrack("T02     WAV")) {
-          debugPrintLn("failed to play sound");
-        }
+      if(!sfx.playTrack(floorPassingChimeFile)) {
+        debugPrintLn("failed to play sound");
       }
     }
+
+    if( lastDoorState != doorState) {
+      if(doorState == OPENING) {
+        safeStop();
+        if(!sfx.playTrack(doorOpeningFile)) {
+          debugPrintLn("failed to play sound");
+        }
+      }
+      else if( doorState == CLOSING) {
+        safeStop();
+        if(!sfx.playTrack(doorClosingFile)) {
+          debugPrintLn("failed to play sound");
+        }
+      }
+      lastDoorState = doorState;
+    }
+    
 }
 
 boolean isFloorButton(int buttonId) {
