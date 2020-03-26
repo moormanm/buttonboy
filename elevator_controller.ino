@@ -19,81 +19,92 @@ Adafruit_Soundboard sfx = Adafruit_Soundboard(&Serial1, &Serial, SFX_RST);
 #define FLOOR_PASSING_DELAY 1600
 #define FLOOR_STOP_DELAY 3000
 
-enum DoorState { OPEN, CLOSED, OPENING, CLOSING };
-const char* doorStStr[4] = {"Open","Closed","Opening", "Closing"};
+enum DoorState { OPEN, CLOSED, OPENING, CLOSING, NUDGE_MODE };
+const char* doorStStr[] = {"Open","Closed","Opening", "Closing", "NudgeMode"};
 DoorState doorState = CLOSED;
 
 char floorPassingChimeFile[] = "PASSCHMEWAV";
 char doorOpeningFile[] = "OPENDOORWAV";
 char doorClosingFile[] = "CLSEDOORWAV";
+char nudgeModeFile[] = "NUDGEMDEWAV";
 
 //Pin configurations
-#define FIRE_BUTTON 24
-#define CALL_CANCEL_BUTTON 23
+#define FIRE_BUTTON_PIN 31
+#define CALL_CANCEL_BUTTON_PIN 36
+#define DOOR_OPEN_BUTTON_PIN 51
+#define DOOR_CLOSE_BUTTON_PIN 43
+#define EMERGENCY_PHONE_BUTTON_PIN 45
+#define ALARM_BUTTON_PIN 53
 #define NUM_BUTTONS 25
 #define NUM_FLOOR_BUTTONS 19
 
-#define DEBUG
+//#define DEBUG
 
 int buttonId2InputPin[NUM_BUTTONS] = {
-  47,
-  39,
-  41,
-  30,
-  49,
-  34,
-  46,
-  29,
-  44,
-  28,
-  42,
-  37,
-  40,
-  35,
-  50,
-  32,
-  48,
-  33,
-  38,
-  36,
-  31,
-  43,
-  51,
-  53,
-  45
+  47, //0
+  39, //1
+  41, //2
+  30, //3
+  49, //4
+  34, //5
+  46, //6
+  29, //7
+  44, //8
+  28, //9
+  42, //10
+  37, //11
+  40, //12
+  35, //13
+  50, //14
+  32, //15
+  48, //16
+  33, //17
+  38, //18
+  CALL_CANCEL_BUTTON_PIN, //19
+  FIRE_BUTTON_PIN, //20
+  DOOR_CLOSE_BUTTON_PIN, //21
+  DOOR_OPEN_BUTTON_PIN, //22
+  ALARM_BUTTON_PIN, //23
+  EMERGENCY_PHONE_BUTTON_PIN //24
 };
 
 int buttonId2OutputPin[NUM_BUTTONS] = {
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2,
-  2
-};
+  A11, //1  B2
+  A6, //2  B1 //Need to look at pin
+  2, //3  1
+  A14, //4  20 
+  A0, //5  21
+  25, //6  22
+  A4, //7 23
+  24, //8 24
+  A9,  //9 25
+  17, //10 26 
+  A13, //11 27
+  A2, //12 28
+  A8, //13  29
+  22, //14   30
+  A12, //15 31  
+  23,  //16 32
+  A1, //17 33
+  26, //18  34
+  A5, //19  35
+  13, //20  //CANCEL
+  27, //21  //FIRE
+  12, //22 //CLOSE  
+  A15, //23  //OPEN
+  A7, //24  //ALARM
+  A3 //25   //EMERGENCY
+ };
+
+
+// = 30
+//A5 = FIRE_BUTTON_OUT
+//A13 = CALL_CANCEL_OUT
+
 
 int floorButtonId2FloorNumber[NUM_FLOOR_BUTTONS] = {
-  82,
-  81,
+  82, //82 is a poor man's B2
+  81, //81 is a poor man's B1
   1,
   20,
   21,
@@ -149,15 +160,22 @@ void printState() {
   debugPrintLn("currentDirection=%d, elevatorIsMoving=%d, doorState=%s, currentFloor=%d", currentDirection, elevatorIsMoving, doorStStr[doorState], currentFloor);
 }
 
-/*
+boolean cancelButtonIsPressed() {
+  int result = digitalRead(CALL_CANCEL_BUTTON_PIN);
+  return result == 0;
+}
+
 void onCancelButtonPressed() {
   for(int i=0; i < NUM_FLOOR_BUTTONS; i++) {
+    if(elevatorIsMoving && activeCalls[i] && currentDirection + currentFloor == i) {
+      continue;
+    }
     activeCalls[i] = false;
   }
-  currentDirection = 0;
+ 
   return;
 }
-*/
+
 /*
 void fireButtonModeIteration() {
   int diff =  millis() - fireButtonModeStartedMillis;
@@ -203,7 +221,10 @@ boolean elevatorHasReachedNextFloor() {
   
 }
 
-
+boolean doorOpenButtonIsPressed() {
+  int result = digitalRead(DOOR_OPEN_BUTTON_PIN);
+  return result == 0;
+}
 void unsetCall(int buttonId) {
   debugPrintLn("Unsetting call %d\n", buttonId);
   printState();
@@ -219,9 +240,13 @@ void setCall(int buttonId) {
 unsigned long doorOpenStartedTimeMillis;
 unsigned long doorOpenFinishedTimeMillis;
 unsigned long doorCloseStartedTimeMillis;
-#define DOOR_OPEN_DELAY 2000
-#define DOOR_CLOSING_DELAY 1200
-#define DOOR_OPENING_DELAY 1200
+unsigned long nudgeModeStartedTimeMillis;
+
+#define DOOR_OPEN_DELAY 3000
+#define DOOR_CLOSING_DELAY 3000
+#define DOOR_OPENING_DELAY 3000
+#define MAX_DOOR_OPEN 10000
+#define NUDGE_MODE_DURATION 6000
 
 void startOpeningDoor() {
   doorOpenStartedTimeMillis = millis();
@@ -231,6 +256,7 @@ void startOpeningDoor() {
 }
 
 void updateDoorState() {
+  
   if(doorState == OPEN && millis() - doorOpenFinishedTimeMillis > DOOR_OPEN_DELAY) {
     doorState = CLOSING;
     doorCloseStartedTimeMillis = millis();
@@ -242,7 +268,21 @@ void updateDoorState() {
     doorState = OPEN;
     doorOpenFinishedTimeMillis = millis();
   }
+  else if( doorState == OPEN && millis() - doorOpenStartedTimeMillis > MAX_DOOR_OPEN) {
+    doorState = NUDGE_MODE;
+    nudgeModeStartedTimeMillis = millis();
+  }
+  else if( doorState == NUDGE_MODE && millis() - nudgeModeStartedTimeMillis > NUDGE_MODE_DURATION) {
+    doorState = CLOSED;
+  }
   else {
+    if(doorState == OPEN && doorOpenButtonIsPressed()) {
+      //Extend the timer
+      doorOpenFinishedTimeMillis = millis();
+    }
+    if(doorState == CLOSING && doorOpenButtonIsPressed()) {
+      doorState = OPENING; 
+    }
     return;
   }
   printState();
@@ -251,12 +291,12 @@ void updateDoorState() {
 
 void normalModeIteration() {
    floorChanged = false;
-   /*
-   if( isButtonPressed(CALL_CANCEL_BUTTON) ) {
+   
+   if( cancelButtonIsPressed( ) ) {
       onCancelButtonPressed();
       return;
    }
-   */
+   
 
    consumeNewFloorCalls();
    
@@ -359,7 +399,7 @@ void determineCurrentDirection() {
    else if(currentDirection == DIR_DOWN) {
      boolean activeCallsPending = false;
      //Turn off current direction if there are no more floors above this one
-     for(int i = currentFloor; i > 0; i--) {
+     for(int i = currentFloor; i >= 0; i--) {
        if(activeCalls[i]) {
          activeCallsPending = true;
          break;
@@ -467,7 +507,12 @@ void normalModeRenderState() {
     if(lastFloor != currentFloor) {
       lastFloor = currentFloor;
       //Current floor rendering
-      matrix.writeDigitNum(0, floorToDisplay / 10, false);
+      if(floorToDisplay == 82 || floorToDisplay == 81) {
+         matrix.writeDigitRaw(0, 4 + 8 + 16 + 32 + 64);
+      }
+      else {
+        matrix.writeDigitNum(0, floorToDisplay / 10, false); 
+      }
       matrix.writeDigitNum(1, floorToDisplay % 10, false);  
       dirty = true;
     }
@@ -524,6 +569,12 @@ void normalModeRenderState() {
           debugPrintLn("failed to play sound");
         }
       }
+      else if( doorState == NUDGE_MODE) {
+        safeStop();
+        if(!sfx.playTrack(nudgeModeFile)) {
+          debugPrintLn("failed to play sound");
+        }
+      }
       lastDoorState = doorState;
     }
     
@@ -539,7 +590,7 @@ boolean isButtonPressed(int buttonId) {
 }
 
 void illuminateButton(int buttonId, boolean isOn) {
-   digitalWrite(buttonId, isOn);
+   digitalWrite(buttonId2OutputPin[buttonId], isOn);
 }
 
 void safeStop() {
