@@ -23,10 +23,12 @@ enum DoorState { OPEN, CLOSED, OPENING, CLOSING, NUDGE_MODE };
 const char* doorStStr[] = {"Open","Closed","Opening", "Closing", "NudgeMode"};
 DoorState doorState = CLOSED;
 
+//Sound files
 char floorPassingChimeFile[] = "PASSCHMEWAV";
 char doorOpeningFile[] = "OPENDOORWAV";
 char doorClosingFile[] = "CLSEDOORWAV";
 char nudgeModeFile[] = "NUDGEMDEWAV";
+char helpFireFile[] = "HELPFIREWAV";
 
 //Pin configurations
 #define FIRE_BUTTON_PIN 31
@@ -129,6 +131,7 @@ int floorButtonId2FloorNumber[NUM_FLOOR_BUTTONS] = {
 boolean isInFireButtonMode;
 int currentFloor = 0;
 boolean lastButtonState[NUM_BUTTONS];
+boolean forceDraw = false;
 
 //normal mode variables
 boolean activeCalls[NUM_FLOOR_BUTTONS];
@@ -136,7 +139,6 @@ int currentDirection = 0;
 unsigned long elevatorStartedMovingTimeMillis;
 unsigned long doorOpenedTimeMillis;
 
-boolean elevatorIsMoving = false;
 boolean floorChanged;
 
 //fire button mode variables
@@ -144,6 +146,11 @@ unsigned long  fireButtonModeStartedMillis;
 boolean isButtonIlluminated[NUM_BUTTONS];
 int ledDigitDisplayValue = 1;
 boolean ledIsOn = true;
+
+int currentMovementDirection = 0;
+boolean elevatorIsMoving() {
+  return currentMovementDirection != 0;
+}
 
 void debugPrintLn(const char* fmt, ...) {
   #ifdef DEBUG
@@ -157,7 +164,7 @@ void debugPrintLn(const char* fmt, ...) {
 }
 
 void printState() { 
-  debugPrintLn("currentDirection=%d, elevatorIsMoving=%d, doorState=%s, currentFloor=%d", currentDirection, elevatorIsMoving, doorStStr[doorState], currentFloor);
+  debugPrintLn("currentDirection=%d, elevatorIsMoving=%d, doorState=%s, currentFloor=%d", currentDirection, currentMovementDirection, doorStStr[doorState], currentFloor);
 }
 
 boolean cancelButtonIsPressed() {
@@ -167,18 +174,13 @@ boolean cancelButtonIsPressed() {
 
 void onCancelButtonPressed() {
   for(int i=0; i < NUM_FLOOR_BUTTONS; i++) {
-    if(elevatorIsMoving && activeCalls[i] && currentDirection + currentFloor == i) {
-      continue;
-    }
     activeCalls[i] = false;
   }
- 
   return;
 }
 
-/*
 void fireButtonModeIteration() {
-  int diff =  millis() - fireButtonModeStartedMillis;
+  unsigned long diff =  millis() - fireButtonModeStartedMillis;
   int segment = diff % 2000;
   boolean illuminated = true;
   if(segment >= 1000) {
@@ -190,29 +192,42 @@ void fireButtonModeIteration() {
   ledIsOn = illuminated;
 }
 
+boolean lastLedIsOnState;
 void fireButtonModeRenderState() {
+    if(lastLedIsOnState == ledIsOn) {
+      return;
+    }
+    lastLedIsOnState = ledIsOn;
     if(ledIsOn) {
-      //Current floor rendering
-      matrix.writeDigitNum(0, currentFloor / 10, false);
-      matrix.writeDigitNum(1, currentFloor % 10, false);  
+       matrix.writeDigitRaw(0, 2 + 4  + 16 + 32 + 64 );
+       matrix.writeDigitRaw(1, 1 + 8 + 16 + 32 + 64);
+       matrix.writeDigitRaw(3, 8 + 16 + 32);
+       matrix.writeDigitRaw(4, 1 + 2 + 16 + 32 + 64 );
+       int isPlaying = digitalRead(SFX_ACT);
+       if (isPlaying != LOW) {
+          sfx.playTrack(helpFireFile);
+       }
     }
     else {
       matrix.writeDigitRaw(0, 0);
-      matrix.writeDigitRaw(0, 1);
+      matrix.writeDigitRaw(1, 0);
+      matrix.writeDigitRaw(2, 0);
+      matrix.writeDigitRaw(3, 0);
+      matrix.writeDigitRaw(4, 0);
     }
-    
+    matrix.writeDisplay();
     //light up or turn off currently pressed buttons
-    for(int i=0; i<NUM_BUTTONS; i++`) {
+    for(int i=0; i<NUM_BUTTONS; i++) {
        illuminateButton(i, isButtonIlluminated[i]);
     }
 }
-*/
+
 
 
 void startMoving() {
   debugPrintLn("Start moving");
   printState();
-  elevatorIsMoving = true;
+  currentMovementDirection = currentDirection;
   elevatorStartedMovingTimeMillis = millis();
 }
 
@@ -308,12 +323,12 @@ void normalModeIteration() {
    }
    
    //No calls are set - nothing to do
-   if(currentDirection == 0) {
+   if(currentDirection == 0 && !elevatorIsMoving()) {
      return;
    }
    
   
-   if(!elevatorIsMoving) {
+   if(!elevatorIsMoving()) {
      startMoving();
      return;
    }
@@ -323,7 +338,7 @@ void normalModeIteration() {
    }
    
    changeFloors();
-   elevatorIsMoving = false;
+   currentMovementDirection = 0;
    if(activeCalls[currentFloor]) {
       unsetCall(currentFloor);
       startOpeningDoor();
@@ -335,21 +350,21 @@ void normalModeIteration() {
 
 void loop() {
 
-   /*
+   
    enterOrExitFireButtonMode();
    if( isInFireButtonMode ) {
       fireButtonModeIteration();
       fireButtonModeRenderState();
       return;
    }
-   */
+   
    normalModeIteration();
    normalModeRenderState();
 
 }
 
 void changeFloors() {
-   currentFloor = currentFloor + currentDirection;
+   currentFloor = currentFloor + currentMovementDirection;
    floorChanged = true;
    debugPrintLn("Changing floors to %d",currentFloor);
    printState();
@@ -442,30 +457,35 @@ void consumeNewFloorCalls() {
 }
 
 
+boolean fireButtonIsPressed() {
+  int result = digitalRead(FIRE_BUTTON_PIN);
+  return result == 0;
+}
 
-/*
+
 void enterOrExitFireButtonMode() {
   if(isInFireButtonMode) {
-       if( isButtonPressed(CALL_CANCEL_BUTTON) ) {
+       if( cancelButtonIsPressed() ) {
           //leave fire button mode
           isInFireButtonMode = false;
-          doorIsOpen = false;
-          elevatorIsMoving = false;
-          currentDirection = false;
+          currentDirection = 0;
+          currentMovementDirection = 0;
+          doorState = CLOSED;
+          forceDraw = true;
        } 
        return;
   }
 
-  if(isButtonPressed(FIRE_BUTTON) ) {
+  if(fireButtonIsPressed() ) {
      isInFireButtonMode = true;
      fireButtonModeStartedMillis = millis();
      currentDirection = 0;
-     elevatorIsMoving = false;
-     doorIsOpen = true;
+     currentMovementDirection = 0;
+     doorState = OPEN;
   }
   
 }
-*/
+
 
 unsigned long lastMovementRenderTime = -1;
 #define PROGRESS_MOVEMENT_DISPLAY_DELAY 100
@@ -475,15 +495,15 @@ int sequenceIdx = 0;
 boolean renderMovementIndicator() {
   boolean isDirty = false;
   //Clear screen if it stopped
-  if(!elevatorIsMoving) {
-     if(lastElevatorIsMovingState != elevatorIsMoving) {
+  if(!elevatorIsMoving()) {
+     if(lastElevatorIsMovingState != elevatorIsMoving()) {
         matrix.writeDigitRaw(3, 0);
         isDirty = true;
      }
-     lastElevatorIsMovingState = elevatorIsMoving;
+     lastElevatorIsMovingState = elevatorIsMoving();
      return isDirty;
   }
-  lastElevatorIsMovingState = elevatorIsMoving;
+  lastElevatorIsMovingState = elevatorIsMoving();
   
   if(millis() - lastMovementRenderTime < PROGRESS_MOVEMENT_DISPLAY_DELAY) {
     return false;
@@ -498,27 +518,35 @@ boolean renderMovementIndicator() {
   
 }
 
+
 int lastFloor = -1;
 int lastDirection = -1;
 DoorState lastDoorState = CLOSED;
 void normalModeRenderState() {
     int floorToDisplay = floorButtonId2FloorNumber[currentFloor];
     boolean dirty = false;
-    if(lastFloor != currentFloor) {
+    if(lastFloor != currentFloor || forceDraw) {
       lastFloor = currentFloor;
       //Current floor rendering
       if(floorToDisplay == 82 || floorToDisplay == 81) {
          matrix.writeDigitRaw(0, 4 + 8 + 16 + 32 + 64);
+         matrix.writeDigitNum(1, floorToDisplay % 10, false);
+      }
+      else if( floorToDisplay == 1 ) {
+        matrix.writeDigitRaw(0, 8 + 16 + 32);
+        matrix.writeDigitRaw(1, 0); 
       }
       else {
         matrix.writeDigitNum(0, floorToDisplay / 10, false); 
+        matrix.writeDigitNum(1, floorToDisplay % 10, false);
       }
-      matrix.writeDigitNum(1, floorToDisplay % 10, false);  
+      
+      matrix.writeDigitRaw(3, 0);  
       dirty = true;
     }
 
     dirty |= renderMovementIndicator();
-    if(currentDirection != lastDirection) {
+    if(currentDirection != lastDirection || forceDraw) {
        dirty = true;
        lastDirection = currentDirection;
        if(currentDirection == DIR_UP) {
@@ -548,7 +576,7 @@ void normalModeRenderState() {
     }
     
 
-    if(floorChanged && elevatorIsMoving) {
+    if(floorChanged && elevatorIsMoving()) {
       debugPrintLn("playing a sound");
       safeStop();
       if(!sfx.playTrack(floorPassingChimeFile)) {
@@ -577,6 +605,7 @@ void normalModeRenderState() {
       }
       lastDoorState = doorState;
     }
+    forceDraw = false;
     
 }
 
@@ -601,8 +630,11 @@ void safeStop() {
 }
 
 void setup() {
-  
+
+  #ifdef DEBUG
   Serial.begin(9600);
+  #endif 
+  
   matrix.begin(0x70);
   Serial1.begin(9600); //Soundboard
   
