@@ -23,6 +23,7 @@
 #define DIR_UP 1
 #define DIR_DOWN -1
 #define FLOOR_PASSING_DELAY 1600
+#define EXPRESS_ZONE_FLOOR_PASSING_DELAY 5000 
 #define FLOOR_STOP_DELAY 3000
 #define DOOR_OPEN_DELAY 3000
 #define DOOR_CLOSING_DELAY 3000
@@ -218,6 +219,7 @@ boolean lastButtonState[NUM_BUTTONS];
 boolean forceDraw = false;
 boolean lastLedIsOnState;
 boolean isButtonIlluminated[NUM_BUTTONS];
+boolean lastExpressZoneState;
 
 void debugPrintLn(const char* fmt, ...) {
   #ifdef DEBUG
@@ -308,7 +310,14 @@ void startMoving() {
   elevatorStartedMovingTimeMillis = millis();
 }
 
+boolean isInExpressZone() {
+  return currentFloor == 2 && currentMovementDirection == 1 || currentFloor == 3 && currentMovementDirection == -1;
+}
 boolean elevatorHasReachedNextFloor() {
+  
+  if(isInExpressZone()) {
+    return millis() - elevatorStartedMovingTimeMillis > EXPRESS_ZONE_FLOOR_PASSING_DELAY;
+  }
   return millis() - elevatorStartedMovingTimeMillis > FLOOR_PASSING_DELAY;  
 }
 
@@ -580,18 +589,23 @@ void getDoorOpenFile(char* buf, int currentFloorIdx, int currentDirection) {
 void normalModeRenderState() {
     int floorToDisplay = floorButtonId2FloorNumber[currentFloor];
     boolean dirty = false;
-    if(lastFloor != currentFloor || forceDraw) {
+    if(lastFloor != currentFloor || forceDraw || lastExpressZoneState != isInExpressZone() ) {
       lastFloor = currentFloor;
+      lastExpressZoneState = isInExpressZone();
       //Current floor rendering
       if(floorToDisplay == 82 || floorToDisplay == 81) {
          matrix.writeDigitRaw(0, 4 + 8 + 16 + 32 + 64);
          matrix.writeDigitNum(1, floorToDisplay % 10, false);
       }
+      else if( isInExpressZone() ) {
+        matrix.writeDigitRaw(0, 1 + 8 + 16 + 32 + 64); // E
+        matrix.writeDigitRaw(1, 1 + 2 + 16 + 32 + 64); // P
+      
+      }
       else if( floorToDisplay == 1 ) { //Floor L
-        //matrix.writeDigitRaw(0, 8 + 16 + 32);
-        //matrix.writeDigitRaw(1, 0);
-        matrix.writeDigitNum(0, 1, false); //April fools mode
-        matrix.writeDigitNum(1, 3, false); //April fools mode
+        matrix.writeDigitRaw(0, 8 + 16 + 32);
+        matrix.writeDigitRaw(1, 0);
+        
       }
       else {
         matrix.writeDigitNum(0, floorToDisplay / 10, false); 
