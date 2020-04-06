@@ -311,10 +311,10 @@ void startMoving() {
 }
 
 boolean isInExpressZone() {
-  return currentFloor == 2 && currentMovementDirection == 1 || currentFloor == 3 && currentMovementDirection == -1;
+  return  currentFloor == 2 && currentMovementDirection == 1 || currentFloor == 3 && currentMovementDirection == -1;
 }
 boolean elevatorHasReachedNextFloor() {
-  
+
   if(isInExpressZone()) {
     return millis() - elevatorStartedMovingTimeMillis > EXPRESS_ZONE_FLOOR_PASSING_DELAY;
   }
@@ -586,18 +586,23 @@ void getDoorOpenFile(char* buf, int currentFloorIdx, int currentDirection) {
   sprintf(buf, ret);
 }
 
+boolean isInExpressAndIsPastInitialFloor() {
+  return isInExpressZone() &&  millis() - elevatorStartedMovingTimeMillis > FLOOR_PASSING_DELAY;
+
+}
+
 void normalModeRenderState() {
     int floorToDisplay = floorButtonId2FloorNumber[currentFloor];
     boolean dirty = false;
-    if(lastFloor != currentFloor || forceDraw || lastExpressZoneState != isInExpressZone() ) {
+    if(lastFloor != currentFloor || forceDraw || lastExpressZoneState != isInExpressAndIsPastInitialFloor() ) {
       lastFloor = currentFloor;
-      lastExpressZoneState = isInExpressZone();
+      lastExpressZoneState = isInExpressAndIsPastInitialFloor();
       //Current floor rendering
       if(floorToDisplay == 82 || floorToDisplay == 81) {
          matrix.writeDigitRaw(0, 4 + 8 + 16 + 32 + 64);
          matrix.writeDigitNum(1, floorToDisplay % 10, false);
       }
-      else if( isInExpressZone() ) {
+      else if( isInExpressAndIsPastInitialFloor() ) {
         matrix.writeDigitRaw(0, 1 + 8 + 16 + 32 + 64); // E
         matrix.writeDigitRaw(1, 1 + 2 + 16 + 32 + 64); // P
       
