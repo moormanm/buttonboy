@@ -29,7 +29,7 @@
 #define DOOR_CLOSING_DELAY 3000
 #define DOOR_OPENING_DELAY 3000
 #define MAX_DOOR_OPEN 10000
-#define NUDGE_MODE_DURATION 6000
+#define NUDGE_MODE_DURATION 9000
 #define PROGRESS_MOVEMENT_DISPLAY_DELAY 100
 
 const int buttonId2InputPin[NUM_BUTTONS] = {
@@ -112,7 +112,7 @@ const int floorButtonId2FloorNumber[NUM_FLOOR_BUTTONS] = {
 
 //Sound files
 char doorClosingFile[] = "CLSEDOORWAV";
-char nudgeModeFile[] = "NUDGEMDEWAV";
+char nudgeModeFile[] = "NUDGEMDEOGG";
 char helpFireFile[] = "HELPFIREWAV";
 char normalChimeFile[] = "PASSCHMEWAV";
 char dieselDucyFile[] = "DIESELDUWAV";
@@ -248,6 +248,21 @@ boolean cancelButtonIsPressed() {
 boolean emergencyPhoneButtonIsPressed() {
   int result = digitalRead(EMERGENCY_PHONE_BUTTON_PIN);
   return result == 0;  
+}
+
+boolean lastEmergencyPhoneButtonPressedState = false;
+unsigned long emergencyPhoneButtonPressStartTime;
+boolean emergencyPhoneButtonIsHeld() {
+  if( emergencyPhoneButtonIsPressed()) {
+     if( !lastEmergencyPhoneButtonPressedState) {
+       lastEmergencyPhoneButtonPressedState = true;
+       emergencyPhoneButtonPressStartTime = millis(); 
+     }
+     return millis() - emergencyPhoneButtonPressStartTime > 2000;
+  }
+  lastEmergencyPhoneButtonPressedState = false;  
+  return false;
+  
 }
 boolean alarmButtonIsPressed() {
   int result = digitalRead(ALARM_BUTTON_PIN);
@@ -609,8 +624,7 @@ void normalModeRenderState() {
       }
       else if( floorToDisplay == 1 ) { //Floor L
         matrix.writeDigitRaw(0, 8 + 16 + 32);
-        matrix.writeDigitRaw(1, 0);
-        
+        matrix.writeDigitRaw(1, 0);    
       }
       else {
         matrix.writeDigitNum(0, floorToDisplay / 10, false); 
@@ -707,14 +721,133 @@ void safeStop() {
   }
 }
 
+
+int floor9999ModeCurrentFloor;
+int floor9999ModeVelocity;
+int floor9999ModeMaxVelocity = 10;
+boolean isInFloor9999Mode = false;
+unsigned long floor9999ModeStartedMillis;
+void enterOrExitFloor9999Mode() {
+  if(isInFloor9999Mode) {
+       if( cancelButtonIsPressed() && !emergencyPhoneButtonIsPressed() ) {
+          //leave  mode
+          isInFloor9999Mode = false;
+          currentDirection = 0;
+          currentMovementDirection = 0;
+          doorState = CLOSED;
+          forceDraw = true;
+       } 
+       return;
+  }
+
+  if(emergencyPhoneButtonIsHeld() && !isInFloor9999Mode ) {
+     isInFloor9999Mode = true;
+     floor9999ModeStartedMillis = millis();
+     currentDirection = 0;
+     currentMovementDirection = 0;
+     forceDraw = true;
+     floor9999ModeCurrentFloor = 0;
+     floor9999ModeVelocity = 1;
+     for(int i=0; i<NUM_BUTTONS; i++) {
+       illuminateButton(i, false);
+    }
+  }
+  
+}
+
+unsigned long floor999ModeLastFloorChangeMillis;
+void floor9999ModeIteration() {
+  unsigned long diff =  millis() - floor999ModeLastFloorChangeMillis;
+
+   //implement rowie's optional chiming logic
+   if( emergencyPhoneButtonIsPressed() ) {
+       floorPassingChimeFile = normalChimeFile; 
+   }
+   else if( alarmButtonIsPressed() ) {
+       floorPassingChimeFile = dieselDucyFile;
+   }
+
+  
+  if( diff > 400 && floor9999ModeCurrentFloor < 9999 && !cancelButtonIsPressed()) {
+    floor999ModeLastFloorChangeMillis = millis();
+     floor9999ModeCurrentFloor += 1;
+     if(floor9999ModeCurrentFloor == 13) {
+       floor9999ModeCurrentFloor +=1;
+     }
+   
+  }
+}
+
+void writeNumFromChar(int digNum, char val) {
+  if(val == ' ') {
+    matrix.writeDigitRaw(digNum, 0);
+    return;
+  }
+  matrix.writeDigitNum(digNum, val - '0' );
+}
+void customWriteDigitNum(int targetFloor) {
+  if(targetFloor == 0) {
+     matrix.writeDigitRaw(0, 1+8+16+32); //C
+     matrix.writeDigitRaw(1, 1+2+4+16+32); //N
+     matrix.writeDigitRaw(3, 1+8+16+32); //C
+     matrix.writeDigitRaw(4, 16+32+8); //L
+     return;
+     
+  }
+  
+  char buf[5];
+  sprintf(buf, "%4d", targetFloor);
+  
+  writeNumFromChar(0, buf[0]);
+  writeNumFromChar(1, buf[1]);
+  writeNumFromChar(3, buf[2]);
+  writeNumFromChar(4, buf[3]);  
+  
+}
+
+int lastFloor9999ModeFloor = -1;
+void floor9999ModeRenderState() {
+
+  for(int i=0; i< NUM_BUTTONS; i++) {
+     illuminateButton(i,isButtonPressed(i));
+  }
+  if( floor9999ModeCurrentFloor == 0 ) {
+    customWriteDigitNum(floor9999ModeCurrentFloor);
+    matrix.writeDisplay();
+    return;
+  }
+  
+  if(lastFloor9999ModeFloor == floor9999ModeCurrentFloor) {
+    return;
+  }
+  lastFloor9999ModeFloor = floor9999ModeCurrentFloor;
+
+  customWriteDigitNum(lastFloor9999ModeFloor);
+  matrix.writeDisplay();
+  //Play the floor passing chime
+  safeStop();
+  if(!sfx.playTrack(floorPassingChimeFile)) {
+    debugPrintLn("failed to play sound");
+  }
+}
+
 //Arduino entry point - this is called endlessly
 void loop() {
    enterOrExitFireButtonMode();
+   
    if( isInFireButtonMode ) {
       fireButtonModeIteration();
       fireButtonModeRenderState();
       return;
    }
+
+   enterOrExitFloor9999Mode();
+   if( isInFloor9999Mode ) {
+       floor9999ModeIteration();
+       floor9999ModeRenderState();
+       return;
+   }
+   
    
    normalModeIteration();
    normalModeRenderState();
