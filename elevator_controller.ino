@@ -19,6 +19,9 @@
 #define NUM_BUTTONS 25
 #define NUM_FLOOR_BUTTONS 19
 
+#define FLOOR_34_BUTTON_PIN 33
+#define FLOOR_35_BUTTON_PIN 38
+
 //Various constants
 #define DIR_UP 1
 #define DIR_DOWN -1
@@ -50,8 +53,8 @@ const int buttonId2InputPin[NUM_BUTTONS] = {
   50, //14
   32, //15
   48, //16
-  33, //17
-  38, //18
+  FLOOR_34_BUTTON_PIN, //17
+  FLOOR_35_BUTTON_PIN, //18
   CALL_CANCEL_BUTTON_PIN, //19
   FIRE_BUTTON_PIN, //20
   DOOR_CLOSE_BUTTON_PIN, //21
@@ -341,6 +344,21 @@ boolean doorOpenButtonIsPressed() {
   return result == 0;
 }
 
+boolean floor34ButtonIsPressed() {
+  int result = digitalRead(FLOOR_34_BUTTON_PIN);
+  return result == 0;
+}
+boolean floor35ButtonIsPressed() {
+  int result = digitalRead(FLOOR_35_BUTTON_PIN);
+  return result == 0;
+}
+
+boolean doorCloseButtonIsPressed() {
+  int result = digitalRead(DOOR_CLOSE_BUTTON_PIN);
+  return result == 0;
+}
+
+
 void unsetCall(int buttonId) {
   debugPrintLn("Unsetting call %d\n", buttonId);
   printState();
@@ -361,10 +379,11 @@ void startOpeningDoor() {
 }
 
 void updateDoorState() {
-  if(doorState == OPEN && millis() - doorOpenFinishedTimeMillis > DOOR_OPEN_DELAY) {
+  if(doorState == OPEN && (millis() - doorOpenFinishedTimeMillis > DOOR_OPEN_DELAY  || doorCloseButtonIsPressed())) {
     doorState = CLOSING;
     doorCloseStartedTimeMillis = millis();
   }
+  
   else if( doorState == CLOSING && millis() - doorCloseStartedTimeMillis > DOOR_CLOSING_DELAY) {
     doorState = CLOSED; 
   }
@@ -413,14 +432,18 @@ void normalModeIteration() {
    determineCurrentDirection();
 
    updateDoorState();
+   
    if(doorState != CLOSED) {
      return;
    }
    
    //No calls are set - nothing to do
    if(currentDirection == 0 && !elevatorIsMoving()) {
+     if(doorOpenButtonIsPressed()) {
+         startOpeningDoor();
+     }
      return;
-   }
+   } 
    
    if(!elevatorIsMoving()) {
      startMoving();
@@ -609,37 +632,53 @@ boolean isInExpressAndIsPastInitialFloor() {
 void normalModeRenderState() {
     int floorToDisplay = floorButtonId2FloorNumber[currentFloor];
     boolean dirty = false;
-    if(lastFloor != currentFloor || forceDraw || lastExpressZoneState != isInExpressAndIsPastInitialFloor() ) {
+    if(lastFloor != currentFloor || forceDraw || lastExpressZoneState != isInExpressAndIsPastInitialFloor() || lastDoorState != doorState ) {
       lastFloor = currentFloor;
       lastExpressZoneState = isInExpressAndIsPastInitialFloor();
       //Current floor rendering
-      if(floorToDisplay == 82 || floorToDisplay == 81) {
+      if( doorState == NUDGE_MODE) {
+        matrix.writeDigitRaw(0, 1 + 8 + 16 + 32 + 64); // E
+        matrix.writeDigitRaw(1, 1 + 8 + 16 + 32 + 64); // E
+        matrix.writeDigitRaw(3, 1 + 8 + 16 + 32 + 64); // E
+        matrix.writeDigitRaw(4, 1 + 8 + 16 + 32 + 64); // E
+      }
+      else if(floorToDisplay == 82 || floorToDisplay == 81) {
          matrix.writeDigitRaw(0, 4 + 8 + 16 + 32 + 64);
          matrix.writeDigitNum(1, floorToDisplay % 10, false);
+         matrix.writeDigitRaw(3, 0);
+         matrix.writeDigitRaw(4, 0);
       }
       else if( isInExpressAndIsPastInitialFloor() ) {
         matrix.writeDigitRaw(0, 1 + 8 + 16 + 32 + 64); // E
         matrix.writeDigitRaw(1, 1 + 2 + 16 + 32 + 64); // P
-      
+        matrix.writeDigitRaw(3, 0);
+        matrix.writeDigitRaw(4, 0);
       }
       else if( floorToDisplay == 1 ) { //Floor L
         matrix.writeDigitRaw(0, 8 + 16 + 32);
-        matrix.writeDigitRaw(1, 0);    
+        matrix.writeDigitRaw(1, 0);
+        matrix.writeDigitRaw(3, 0);
+        matrix.writeDigitRaw(4, 0);    
       }
       else {
         matrix.writeDigitNum(0, floorToDisplay / 10, false); 
         matrix.writeDigitNum(1, floorToDisplay % 10, false);
+        matrix.writeDigitRaw(3, 0);
+        matrix.writeDigitRaw(4, 0);
       }
       
-      matrix.writeDigitRaw(3, 0);  
+        
       dirty = true;
     }
 
     dirty |= renderMovementIndicator();
-    if(currentDirection != lastDirection || forceDraw) {
+    if(currentDirection != lastDirection || forceDraw || dirty) {
        dirty = true;
        lastDirection = currentDirection;
-       if(currentDirection == DIR_UP) {
+       if( doorState == NUDGE_MODE) {
+         // Do nothing
+       }
+       else if(currentDirection == DIR_UP) {
           matrix.writeDigitRaw(4,  2 + 4 + 8 + 16 + 32);   
        }
        else if(currentDirection == DIR_DOWN) { 
@@ -721,10 +760,8 @@ void safeStop() {
   }
 }
 
-
+float velocity9999mode = 1;
 int floor9999ModeCurrentFloor;
-int floor9999ModeVelocity;
-int floor9999ModeMaxVelocity = 10;
 boolean isInFloor9999Mode = false;
 unsigned long floor9999ModeStartedMillis;
 void enterOrExitFloor9999Mode() {
@@ -747,17 +784,21 @@ void enterOrExitFloor9999Mode() {
      currentMovementDirection = 0;
      forceDraw = true;
      floor9999ModeCurrentFloor = 0;
-     floor9999ModeVelocity = 1;
      for(int i=0; i<NUM_BUTTONS; i++) {
        illuminateButton(i, false);
     }
+    velocity9999mode = 1;
   }
   
 }
 
+int current9999ModeDirection = 1;
+boolean doorOpenButtonLastState;  
+boolean doorCloseButtonLastState;
 unsigned long floor999ModeLastFloorChangeMillis;
 void floor9999ModeIteration() {
-  unsigned long diff =  millis() - floor999ModeLastFloorChangeMillis;
+  unsigned long diff  =  millis() - floor999ModeLastFloorChangeMillis;
+
 
    //implement rowie's optional chiming logic
    if( emergencyPhoneButtonIsPressed() ) {
@@ -767,12 +808,39 @@ void floor9999ModeIteration() {
        floorPassingChimeFile = dieselDucyFile;
    }
 
+   if( floor35ButtonIsPressed() ) {
+       current9999ModeDirection = 1;
+   }
+   else if( floor34ButtonIsPressed() ) {
+       current9999ModeDirection = -1;
+   }
+   
+  if( doorOpenButtonIsPressed() && !doorOpenButtonLastState ) {
+     
+     velocity9999mode += .2;
+  }
+  if( doorCloseButtonIsPressed() && !doorCloseButtonLastState ) {
+     velocity9999mode -= .2;
+  }
+  if(velocity9999mode > 2.5) {
+      velocity9999mode = 2.5;
+  }
+  if(velocity9999mode <  .4) {
+      velocity9999mode = .4;
+  }
+  doorOpenButtonLastState =  doorOpenButtonIsPressed();
+  doorCloseButtonLastState =  doorCloseButtonIsPressed();
+
+  // Nothing
   
-  if( diff > 400 && floor9999ModeCurrentFloor < 9999 && !cancelButtonIsPressed()) {
+  if( (diff > 400 / velocity9999mode) && floor9999ModeCurrentFloor < (9999 + 3) && !cancelButtonIsPressed() ) {
     floor999ModeLastFloorChangeMillis = millis();
-     floor9999ModeCurrentFloor += 1;
-     if(floor9999ModeCurrentFloor == 13) {
-       floor9999ModeCurrentFloor +=1;
+     floor9999ModeCurrentFloor += current9999ModeDirection;
+     if(floor9999ModeCurrentFloor < 0) {
+       floor9999ModeCurrentFloor = 0;
+     }
+     if(floor9999ModeCurrentFloor == (13+3)) { //Skip unlucky floor number 13
+       floor9999ModeCurrentFloor += current9999ModeDirection;
      }
    
   }
@@ -787,14 +855,44 @@ void writeNumFromChar(int digNum, char val) {
 }
 void customWriteDigitNum(int targetFloor) {
   if(targetFloor == 0) {
+     matrix.writeDigitRaw(0, 0); 
+     matrix.writeDigitRaw(1, 16+32+8); //L
+     matrix.writeDigitRaw(3, 16+32+8); //L
+     matrix.writeDigitRaw(4, 0); 
+     /*
      matrix.writeDigitRaw(0, 1+8+16+32); //C
      matrix.writeDigitRaw(1, 1+2+4+16+32); //N
      matrix.writeDigitRaw(3, 1+8+16+32); //C
      matrix.writeDigitRaw(4, 16+32+8); //L
+     */
      return;
      
   }
-  
+
+  if( targetFloor == 1) {
+     matrix.writeDigitRaw(0, 0); 
+     matrix.writeDigitRaw(1, 0);
+     matrix.writeDigitRaw(3, 4 + 8 + 16 + 32 + 64); //B
+     matrix.writeDigitNum(4, 2, false); //2 
+     return;
+  }
+
+   if( targetFloor == 2) {
+     matrix.writeDigitRaw(0, 0); 
+     matrix.writeDigitRaw(1, 0);
+     matrix.writeDigitRaw(3, 4 + 8 + 16 + 32 + 64); //B
+     matrix.writeDigitNum(4, 1, false); //2
+     return;
+  }
+
+  if( targetFloor == 3) {
+     matrix.writeDigitRaw(0, 0); 
+     matrix.writeDigitRaw(1, 0);
+     matrix.writeDigitRaw(3, 0);
+     matrix.writeDigitRaw(4, 16+32+8); //L 
+     return;
+  }
+  targetFloor -= 3; //Offset back down by three to account for b2, b1, and L
   char buf[5];
   sprintf(buf, "%4d", targetFloor);
   
@@ -804,6 +902,7 @@ void customWriteDigitNum(int targetFloor) {
   writeNumFromChar(4, buf[3]);  
   
 }
+
 
 int lastFloor9999ModeFloor = -1;
 void floor9999ModeRenderState() {
