@@ -19,12 +19,20 @@
 #define NUM_BUTTONS 25
 #define NUM_FLOOR_BUTTONS 19
 
+#define FLOOR_32_BUTTON_PIN 32
+#define FLOOR_33_BUTTON_PIN 48
+
 #define FLOOR_34_BUTTON_PIN 33
 #define FLOOR_35_BUTTON_PIN 38
 
 //Various constants
 #define DIR_UP 1
 #define DIR_DOWN -1
+
+int insaneFast(int duration) {
+  return duration / 10;
+}
+
 #define FLOOR_PASSING_DELAY 1600
 #define EXPRESS_ZONE_FLOOR_PASSING_DELAY 5000 
 #define FLOOR_STOP_DELAY 3000
@@ -51,8 +59,8 @@ const int buttonId2InputPin[NUM_BUTTONS] = {
   40, //12
   35, //13
   50, //14
-  32, //15
-  48, //16
+  FLOOR_32_BUTTON_PIN, //15
+  FLOOR_33_BUTTON_PIN, //16
   FLOOR_34_BUTTON_PIN, //17
   FLOOR_35_BUTTON_PIN, //18
   CALL_CANCEL_BUTTON_PIN, //19
@@ -118,7 +126,8 @@ char doorClosingFile[] = "CLSEDOORWAV";
 char nudgeModeFile[] = "NUDGEMDEOGG";
 char helpFireFile[] = "HELPFIREWAV";
 char normalChimeFile[] = "PASSCHMEWAV";
-char dieselDucyFile[] = "DIESELDUWAV";
+//char dieselDucySoundFile[] = "DIESELDUWAV";
+char doverSoundFile[] = "DOVERBUZWAV";
 const char* doorOpenSoundWithNoDirection[NUM_FLOOR_BUTTONS] = {
   "OD-B2   OGG",
   "OD-B1   OGG",
@@ -208,6 +217,10 @@ boolean floorChanged;
 boolean ledIsOn = true;
 int currentMovementDirection = 0;
 
+int floorPassingDelay = FLOOR_PASSING_DELAY;
+int expressZoneFloorPassingDelay = EXPRESS_ZONE_FLOOR_PASSING_DELAY;
+
+
 
 //Rendering related variables
 char* floorPassingChimeFile = normalChimeFile;
@@ -248,6 +261,9 @@ boolean cancelButtonIsPressed() {
   int result = digitalRead(CALL_CANCEL_BUTTON_PIN);
   return result == 0;
 }
+
+
+
 boolean emergencyPhoneButtonIsPressed() {
   int result = digitalRead(EMERGENCY_PHONE_BUTTON_PIN);
   return result == 0;  
@@ -334,9 +350,9 @@ boolean isInExpressZone() {
 boolean elevatorHasReachedNextFloor() {
 
   if(isInExpressZone()) {
-    return millis() - elevatorStartedMovingTimeMillis > EXPRESS_ZONE_FLOOR_PASSING_DELAY;
+    return millis() - elevatorStartedMovingTimeMillis > expressZoneFloorPassingDelay;
   }
-  return millis() - elevatorStartedMovingTimeMillis > FLOOR_PASSING_DELAY;  
+  return millis() - elevatorStartedMovingTimeMillis > floorPassingDelay;  
 }
 
 boolean doorOpenButtonIsPressed() {
@@ -344,6 +360,14 @@ boolean doorOpenButtonIsPressed() {
   return result == 0;
 }
 
+boolean floor32ButtonIsPressed() {
+  int result = digitalRead(FLOOR_32_BUTTON_PIN);
+  return result == 0;
+}
+boolean floor33ButtonIsPressed() {
+  int result = digitalRead(FLOOR_33_BUTTON_PIN);
+  return result == 0;
+}
 boolean floor34ButtonIsPressed() {
   int result = digitalRead(FLOOR_34_BUTTON_PIN);
   return result == 0;
@@ -419,7 +443,7 @@ void normalModeIteration() {
        floorPassingChimeFile = normalChimeFile; 
    }
    else if( alarmButtonIsPressed() ) {
-       floorPassingChimeFile = dieselDucyFile;
+       floorPassingChimeFile = doverSoundFile;
    }
 
    if( cancelButtonIsPressed( ) ) {
@@ -625,7 +649,7 @@ void getDoorOpenFile(char* buf, int currentFloorIdx, int currentDirection) {
 }
 
 boolean isInExpressAndIsPastInitialFloor() {
-  return isInExpressZone() &&  millis() - elevatorStartedMovingTimeMillis > FLOOR_PASSING_DELAY;
+  return isInExpressZone() &&  millis() - elevatorStartedMovingTimeMillis > floorPassingDelay;
 
 }
 
@@ -805,7 +829,7 @@ void floor9999ModeIteration() {
        floorPassingChimeFile = normalChimeFile; 
    }
    else if( alarmButtonIsPressed() ) {
-       floorPassingChimeFile = dieselDucyFile;
+       floorPassingChimeFile = doverSoundFile;
    }
 
    if( floor35ButtonIsPressed() ) {
@@ -930,9 +954,22 @@ void floor9999ModeRenderState() {
   }
 }
 
+void enterOrExitInsaneFastMode() {
+   if( doorOpenButtonIsPressed() && doorCloseButtonIsPressed() ) {
+       floorPassingDelay = insaneFast(FLOOR_PASSING_DELAY);
+       expressZoneFloorPassingDelay = insaneFast(EXPRESS_ZONE_FLOOR_PASSING_DELAY * 4);
+   }
+   else if ( cancelButtonIsPressed() ) {
+       floorPassingDelay = FLOOR_PASSING_DELAY;
+       expressZoneFloorPassingDelay = EXPRESS_ZONE_FLOOR_PASSING_DELAY;
+   }
+}
+
 //Arduino entry point - this is called endlessly
 void loop() {
    enterOrExitFireButtonMode();
+
+   enterOrExitInsaneFastMode();
    
    if( isInFireButtonMode ) {
       fireButtonModeIteration();
